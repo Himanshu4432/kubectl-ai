@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -299,4 +300,35 @@ func (c *OllamaClient) StreamCompletion(ctx context.Context, systemPrompt, userP
 	}
 
 	return nil
+}
+
+func NewClientFromEnv() (Client, error) {
+	provider := strings.ToLower(getEnv("AI_PROVIDER", "openai"))
+	apiKey := getEnv("AI_API_KEY", "")
+	endpoint := getEnv("AI_ENDPOINT", "")
+	model := getEnv("AI_MODEL", "")
+
+	switch provider {
+	case "openai":
+		if apiKey == "" {
+			return nil, fmt.Errorf("AI_API_KEY environment variable is required for OpenAI")
+		}
+		return NewOpenAIClient(apiKey, endpoint, model), nil
+	case "anthropic":
+		if apiKey == "" {
+			return nil, fmt.Errorf("AI_API_KEY environment variable is required for Anthropic")
+		}
+		return NewAnthropicClient(apiKey, endpoint, model), nil
+	case "ollama":
+		return NewOllamaClient(endpoint, model), nil
+	default:
+		return nil, fmt.Errorf("unsupported AI_PROVIDER: %s. Supported: openai, anthropic, ollama", provider)
+	}
+}
+
+func getEnv(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
 }
