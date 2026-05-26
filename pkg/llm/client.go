@@ -212,3 +212,91 @@ func (c *AnthropicClient) StreamCompletion(ctx context.Context, systemPrompt, us
 
 	return nil
 }
+
+type OllamaClient struct {
+	endpoint string
+	model    string
+}
+
+func NewOllamaClient(endpoint, model string) *OllamaClient {
+	if endpoint == "" {
+		endpoint = "http://localhost:11434/api/chat"
+	}
+	if model == "" {
+		model = "llama3"
+	}
+	return &OllamaClient{
+		endpoint: endpoint,
+		model:    model,
+	}
+}
+
+func (c *OllamaClient) StreamCompletion(ctx context.Context, systemPrompt, userPrompt string, callback func(string)) error {
+	reqBody := map[string]interface{}{
+		"model": c.model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+		"stream": true,
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Ollama API failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var chunk struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Done bool `json:"done"`
+		}
+
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
+		}
+
+		callback(chunk.Message.Content)
+
+		if chunk.Done {
+			break
+		}
+	}
+
+	return nil
+}
