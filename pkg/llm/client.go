@@ -114,3 +114,101 @@ func (c *OpenAIClient) StreamCompletion(ctx context.Context, systemPrompt, userP
 
 	return nil
 }
+
+type AnthropicClient struct {
+	apiKey   string
+	endpoint string
+	model    string
+}
+
+func NewAnthropicClient(apiKey, endpoint, model string) *AnthropicClient {
+	if endpoint == "" {
+		endpoint = "https://api.anthropic.com/v1/messages"
+	}
+	if model == "" {
+		model = "claude-3-5-sonnet-20240620"
+	}
+	return &AnthropicClient{
+		apiKey:   apiKey,
+		endpoint: endpoint,
+		model:    model,
+	}
+}
+
+func (c *AnthropicClient) StreamCompletion(ctx context.Context, systemPrompt, userPrompt string, callback func(string)) error {
+	reqBody := map[string]interface{}{
+		"model":      c.model,
+		"max_tokens": 2048,
+		"system":     systemPrompt,
+		"messages": []map[string]string{
+			{"role": "user", "content": userPrompt},
+		},
+		"stream": true,
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", c.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Anthropic API failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		
+		var chunk struct {
+			Type  string `json:"type"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+
+		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "text_delta" {
+			callback(chunk.Delta.Text)
+		}
+	}
+
+	return nil
+}
