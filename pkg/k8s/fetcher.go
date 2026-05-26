@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -66,4 +67,32 @@ func (f *Fetcher) fetchContainerLogs(ctx context.Context, namespace, podName, co
 		}
 	}
 	return string(logs), nil
+}
+
+func (f *Fetcher) fetchEvents(ctx context.Context, namespace, podName string) ([]EventSummary, error) {
+	selector := fmt.Sprintf("involvedObject.name=%s", podName)
+	opts := metav1.ListOptions{
+		FieldSelector: selector,
+	}
+	eventsList, err := f.clientset.CoreV1().Events(namespace).List(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	var summaries []EventSummary
+	for _, e := range eventsList.Items {
+		summaries = append(summaries, EventSummary{
+			Type:     e.Type,
+			Reason:   e.Reason,
+			Message:  e.Message,
+			Count:    e.Count,
+			LastSeen: e.LastTimestamp.Time,
+		})
+	}
+
+	if len(summaries) > 15 {
+		summaries = summaries[len(summaries)-15:]
+	}
+
+	return summaries, nil
 }
